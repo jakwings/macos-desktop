@@ -1,0 +1,248 @@
+#!/bin/sh
+
+# Copyright (C) 2022 by J.W https://github.com/jakwings/macos-desktop
+#
+#   TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+#
+#  0. You just DO WHAT THE FUCK YOU WANT TO.
+
+# To Customize The Login Screen of MacOS Big Sur
+# ================================================
+#
+# MacOS's Signed System Volume makes it hard to customize the login screen.
+#
+# - https://discussions.apple.com/thread/253382773
+# - https://support.apple.com/guide/security/signed-system-volume-security-secd698747c9
+# - https://grafxflow.co.uk/blog/mac-os-x/delete-ioplatformpluginfamilykext-macos-big-sur
+# - https://github.com/calasanmarko/TurboMac
+#
+# Reference:
+# - https://forums.macrumors.com/threads/yosemite-login-screen-background.1767137/
+# - https://apple.stackexchange.com/questions/367892/cannot-change-login-wallpaper-in-10-15-catalina
+# - https://apple.stackexchange.com/questions/337445/how-do-i-change-the-login-screen-background-in-macos-mojave
+# - https://apple.stackexchange.com/questions/342430/independently-change-lock-screen-and-login-screen-background-image-in-macos-moja
+# - https://apple.stackexchange.com/questions/40644/how-do-i-change-desktop-background-with-a-terminal-command
+# - https://apple.stackexchange.com/questions/117530/setting-account-picture-jpegphoto-with-dscl-in-terminal
+
+set -euf; unset -v IFS; export LC_ALL=C
+
+export PATH='/usr/bin:/bin:/usr/sbin:/sbin'; PATH="$(getconf PATH)"
+
+# Usage: ./SetDesktopPicture [<desktop picture> [<user picture>]]
+
+printf '%s' 'Changing the picture of current desktop ... ' >&2
+
+set_path() {
+  case "$2" in
+    (.|..|/*|./*|../*|'') eval "${1}=\"\${2}\"" ;;
+    (*) eval "${1}=\"./\${2}\"" ;;
+  esac
+}
+
+# WTF: damn whoever made /bin/bash count pairs of quotes in $(here doc)
+set_desktop_image() {
+  osascript - ${1+"$@"} <<'EOT'
+    use framework "Foundation"
+    use framework "AppKit"
+    use scripting additions
+
+    global |$|, nil, NSColor, NSDictionary, NSNumber, NSScreen, NSURL
+
+    on run argv
+        local |picture|, |command|
+
+        set |$| to current application
+        set nil to missing value
+        set NSColor       to  |$|'s class "NSColor"
+        set NSDictionary  to  |$|'s class "NSDictionary"
+        set NSNumber      to  |$|'s class "NSNumber"
+        set NSScreen      to  |$|'s class "NSScreen"
+        set NSURL         to  |$|'s class "NSURL"
+
+        if count of argv is greater than 0 then
+            set |picture| to first item of argv
+        else
+            tell application "System Events"
+                launch
+                set |process| to first application process where frontmost is true
+                set |app| to my application id (bundle identifier of |process|)
+                try
+                    set |title| to localized string "Set Desktop Picture" ¬
+                                   from table "InfoPlist" ¬
+                                   in bundle "/System/Library/Services/Set Desktop Picture.workflow"
+                    choose file of type "public.image" ¬
+                                default location (path to pictures folder) ¬
+                                with prompt |title| ¬
+                                showing package contents true
+                    set |picture| to POSIX path of result
+                    tell me to focus on the |app|
+                    quit
+                on error e number n partial result r from o to t
+                    quit
+                    tell me to focus on the |app|
+                    error e number n partial result r from o to t
+                end try
+            end tell
+        end if
+
+        tell me to setDesktopImage given file:|picture|
+
+        set {_, {|width|, |height|}} to NSScreen's mainScreen's frame as list
+        set |scale|   to NSScreen's mainScreen's backingScaleFactor as real
+        set |width|   to (round |width| * |scale| rounding down) as text
+        set |height|  to (round |height| * |scale| rounding down) as text
+        set |scale| to |scale| as text
+        set |command| to "scale=" & (quoted form of |scale|) ¬
+                         & " width=" & (quoted form of |width|) ¬
+                         & " height=" & (quoted form of |height|) ¬
+                         & " picture=" & (quoted form of |picture|)
+        return |command|
+    end run
+
+    to setDesktopImage given file:|file|
+        set |url|     to NSURL's fileURLWithPath:(POSIX path of (|file| as POSIX file))
+        set |color|   to NSColor's colorWithDeviceCyan:0 magenta:1 yellow:0 black:0 alpha:1
+        set |scaling| to NSNumber's numberWithInteger:(|$|'s NSImageScaleProportionallyUpOrDown)
+	set |options| to NSDictionary's dictionaryWithObjects:{ ¬
+                                          true, ¬
+                                          |color|, ¬
+                                          |scaling| ¬
+                                        } ¬
+                                        forKeys:{ ¬
+                                          |$|'s NSWorkspaceDesktopImageAllowClippingKey, ¬
+                                          |$|'s NSWorkspaceDesktopImageFillColorKey, ¬
+                                          |$|'s NSWorkspaceDesktopImageScalingKey ¬
+                                        }
+        set |workspace| to |$|'s class "NSWorkspace"'s sharedWorkspace
+        repeat with |screen| in NSScreen's screens
+            set {|ok|, |error|} to |workspace|'s setDesktopImageURL:|url| ¬
+                                                 forScreen:|screen| ¬
+                                                 options:|options| ¬
+                                                 |error|:reference
+            if not |ok| then
+                set |message| to |error|'s localizedDescription as text
+                error |message|
+            end if
+        end repeat
+    end setDesktopImage
+
+    to focus on the |app|
+        tell |app|
+            activate
+            if name of |app| is "iTerm" then
+                using terms from application "iTerm"
+                    if count of windows is greater than 0 then
+                        set |window| to front window
+                        if is hotkey window of |window| then
+                            reveal hotkey window |window|
+                        end if
+                    end if
+                end using terms from
+            end if
+        end tell
+    end focus
+EOT
+}
+
+cache_dir="$(getconf DARWIN_USER_CACHE_DIR)"
+set_path cache_dir "${cache_dir}"
+rm -R -f "${cache_dir}/com.apple.desktoppicture"
+
+command="$(set_desktop_image ${1+"$@"})"
+eval " ${command} "  #=> $scale $width $height $picture
+
+printf 'Done!\n' >&2
+
+printf '%s' 'Changing the picture of login screen ... Cancel? [y/N] ' >&2
+IFS='' read -r answer
+case "${answer}" in ([yY]*) exit 0; esac
+
+set_path picture "${picture}"
+
+picw="$(sips --getProperty pixelWidth "${picture}")"
+pich="$(sips --getProperty pixelHeight "${picture}")"
+
+# TODO: auto detect size and position of user picture
+# /System/Library/PrivateFrameworks/LoginUIKit.framework/Resources/Assets.car
+# /System/Library/PrivateFrameworks/LoginUIKit.framework/Resources/Base.lproj/LUIUserView.nib
+# /System/Library/PrivateFrameworks/LoginUIKit.framework/Frameworks/LoginUICore.framework/Resources/GuestUser2@2x.png
+# @1x
+# TextField   : ?x28
+# AvatarMask  : 96 x 96
+# GenericUser : 144 x 144
+# LUIUserView : 210 x 150
+size=290
+case "${scale}:${height}" in
+  (2.0:1280) posx="$(( (width - size) / 2 ))" posy=380 ;;
+  (2.0:1600) posx="$(( (width - size) / 2 ))" posy=511 ;;
+  (2.0:1800) posx="$(( (width - size) / 2 ))" posy=593 ;;
+  (2.0:2100) posx="$(( (width - size) / 2 ))" posy=716 ;;
+  (*) unset -v posx posy
+esac
+
+user="$(id -un)"
+uuid="$(dscl . read "/Users/${user}" GeneratedUID)"
+uuid="${uuid#*' '}"
+lock_screen="/Library/Caches/Desktop Pictures/${uuid}/lockscreen.png"
+# TODO: Gut damn SSV!
+#login_screen='/System/Library/CoreServices/DefaultDesktop.heic'
+
+TMPDIR="${TMPDIR:-/tmp}"
+TMPDIR="${TMPDIR%/}/macos-desktop-$$"
+set_path TMPDIR "${TMPDIR}"
+
+on_exit() {
+  exitcode="$?"
+  if [ 0 -ne "${exitcode}" ]; then
+    printf 'Failed!\n' >&2
+  fi
+  rm -R -f -- "${TMPDIR}"
+  exit "${exitcode}"
+}
+trap on_exit EXIT
+
+mkdir -p -- "${TMPDIR}"
+
+# https://manicmaniac.github.io/sips-js-api/
+# Settings of Fill Screen:
+# NSWorkspaceDesktopImageAllowClippingKey = YES
+# NSWorkspaceDesktopImageScalingKey       = NSImageScaleProportionallyUpOrDown
+cat >"${TMPDIR}/resize.js" <<'EOT'
+  const image = sips.images[0];
+  const {width: iw, height: ih} = image.size;
+  const {width: cw, height: ch} = sips.size;
+  const canvas = new Canvas(cw, ch);
+  const scale = Math.max(cw / iw, ch / ih);
+  let [w, h] = [iw, ih].map(x => x * scale).map(Math.ceil);
+  let x = w > cw ? Math.floor((w - cw) / 2 / scale) : 0;
+  let y = h > ch ? Math.floor((h - ch) / 2 / scale) : 0;
+  w = w > cw ? Math.ceil(cw / scale) : iw;
+  h = h > ch ? Math.ceil(ch / scale) : ih;
+  canvas.drawImage(image, x, y, w, h, 0, 0, cw, ch);
+  let output = new Output(canvas, sips.outputPath);
+  output.addToQueue();
+EOT
+# WTF: argument order of --resampleHeightWidth seems wrong and unreliable
+sips --resampleWidth "${width}" --resampleHeight "${height}" \
+     --js "${TMPDIR}/resize.js" \
+     --setProperty format png --setProperty formatOptions best \
+     --out "${TMPDIR}/login.png" "${picture}" >/dev/null
+
+if [ 2 -le "$#" ]; then
+  set_path userpic "$2"
+  sips --setProperty format jpeg --setProperty formatOptions best \
+       --out "${TMPDIR}/user.jpg" "${userpic}" >/dev/null
+elif [ xy = "${posx+x}${posy+y}" ]; then
+  sips --cropToHeightWidth "${size}" "${size}" --cropOffset "${posy}" "${posx}" \
+       --setProperty format jpeg --setProperty formatOptions best \
+       --out "${TMPDIR}/user.jpg" "${TMPDIR}/login.png" >/dev/null
+fi
+data="$(base64 <"${TMPDIR}/user.jpg")"
+printf '0x0A 0x5C 0x3A 0x2C dsRecTypeStandard:Users 2 dsAttrTypeStandard:RecordName base64:dsAttrTypeStandard:JPEGPhoto\n%s:%s' "${user}" "${data}" >"${TMPDIR}/user.dat"
+
+sudo mkdir -p -- "${lock_screen%/*}"
+sudo cp -- "${TMPDIR}/login.png" "${lock_screen}"
+dscl . delete "/Users/${user}" JPEGPhoto || true
+sudo dsimport "${TMPDIR}/user.dat" /Local/Default M
+
+printf 'Done!\n' >&2
